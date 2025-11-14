@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>⚡️ P2P File Drop V2 (共有コード & デバッグ)</title>
+    <title>⚡️ P2P File Drop V3 (安定版)</title>
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&display=swap" rel="stylesheet">
     <style>
@@ -157,7 +157,7 @@
 </head>
 <body>
     <div class="container">
-        <h1>⚡️ P2P File Drop V2 (共有コード)</h1>
+        <h1>⚡️ P2P File Drop V3 (安定版)</h1>
         <p>※ ファイルデータは端末間で直接転送されます。接続にはPeerJSの無料サービスを使用します。</p>
 
         <div class="card" id="connection-card">
@@ -271,7 +271,6 @@
         function resetState() {
             logDebug("Resetting application state.");
             if (peer) {
-                // ピア接続は切断された可能性が高いので、再初期化を推奨
                 peer.destroy(); 
                 peer = null;
             }
@@ -283,38 +282,44 @@
             hostBtn.disabled = false;
             guestBtn.disabled = false;
             selectBtn.disabled = true;
-            connectionCardEl.style.display = 'block'; // PIN入力エリアを表示に戻す
+            connectionCardEl.style.display = 'block'; 
             
             sendQueueLogEl.innerHTML = '（待機中のファイルはありません）';
-            if (receiveLogEl.innerHTML.includes('接続を待っています...')) {
-                // 初期メッセージはそのまま
-            } else {
+            if (!receiveLogEl.textContent.includes('接続を待っています...')) {
                 receiveLogEl.innerHTML += '<p style="color: red;">接続が切断されました。再接続してください。</p>';
             }
         }
 
         function initializePeer(id = null) {
             logDebug(`Initializing PeerJS with ID: ${id || 'random'}`);
-            if (peer) peer.destroy(); // 既存のピアを確実に破棄
+            if (peer) peer.destroy(); 
 
             updateStatus('接続ID生成中...', 'status-connecting');
             
-            peer = new Peer(id, {
+            // WebRTCの接続を安定させるための設定（ICE/STUN/TURN）を追加
+            const peerConfig = {
                 host: PEERJS_HOST,
                 port: PEERJS_PORT,
                 path: PEERJS_PATH,
-                secure: true 
-            });
+                secure: true,
+                config: {
+                    'iceServers': [
+                        // Googleが提供する公共のSTUNサーバーを追加 (接続確立を高速化)
+                        { 'urls': 'stun:stun.l.google.com:19302' },
+                        { 'urls': 'stun:stun1.l.google.com:19302' },
+                    ]
+                }
+            };
+            
+            peer = new Peer(id, peerConfig);
 
             peer.on('open', (peerId) => {
                 logDebug(`Peer ready. ID: ${peerId}`);
                 updateStatus(isHostMode ? `ホスト待機中 (${peerId})` : 'ゲスト接続準備完了', 'status-ready');
                 
                 if (!isHostMode) {
-                    // ゲストモードの場合、自動でホストに接続を試みる
                     retryConnectToHost();
                 } else {
-                    // ホストモードの場合、相手からの接続を待つ
                     peer.on('connection', (conn) => {
                         if (connection && connection.open) {
                             logDebug("Incoming connection rejected: Already connected.", true);
@@ -330,9 +335,7 @@
 
             peer.on('error', (err) => {
                 logDebug(`Peer Error: ${err.type} | ${err.message}`, true);
-                if (err.type === 'peer-unavailable') {
-                    // ゲスト側で接続対象が見つからない場合はここではエラーとしない (リトライで対応)
-                } else {
+                if (err.type !== 'peer-unavailable') { // peer-unavailableはゲスト側リトライロジックで処理
                     updateStatus('接続エラー', 'status-error');
                     resetState();
                 }
@@ -362,7 +365,6 @@
             pinEl.disabled = true;
             hostBtn.disabled = true;
             guestBtn.disabled = true;
-            // ゲストはランダムIDで初期化し、ホストIDに接続する
             initializePeer(); 
         }
 
@@ -385,7 +387,6 @@
 
             const conn = peer.connect(targetId, { reliable: true }); 
 
-            // 接続成功またはエラーで終了するためのフラグ
             let finished = false; 
 
             conn.on('open', () => {
@@ -397,23 +398,19 @@
 
             conn.on('error', (err) => {
                 logDebug(`Connection Error during attempt: ${err.message}`, true);
-                // 接続対象がいないエラーの場合、リトライ
                 if (!finished && err.type === 'peer-unavailable') {
                     retryCount++;
                     setTimeout(retryConnectToHost, RETRY_INTERVAL);
                 } else if (!finished) {
                     finished = true;
-                    // 他の致命的なエラーの場合はリセット
                     updateStatus('接続エラー', 'status-error');
                     resetState();
                 }
             });
             
-            // 接続が切れた場合もリトライが必要（ただしopen後に閉じられた場合も含む）
             conn.on('close', () => {
                 logDebug("Connection closed during attempt or after establishment.", true);
                 if (!finished) {
-                     // openイベントが発生しなかった場合のクリーンアップ
                      if (retryCount < MAX_RETRY) {
                          retryCount++;
                          setTimeout(retryConnectToHost, RETRY_INTERVAL);
@@ -432,7 +429,7 @@
 
         function handleConnection(conn, isReceiver) {
             connection = conn;
-            retryCount = 0; // リトライをリセット
+            retryCount = 0; 
             selectBtn.disabled = false; 
             connectionCardEl.style.display = 'none'; // PIN入力エリアを隠す
 
@@ -564,8 +561,6 @@
                         reader.readAsArrayBuffer(slice);
                     });
 
-                    // PeerJSはDataChannelのバッファリングを自動で処理するため、
-                    // DataChannelのバッファオーバーフローを考慮したロジックは省略し、代わりにsetTimeoutで負荷軽減
                     connection.send({
                         type: 'file-chunk',
                         fileId: item.id,
@@ -582,7 +577,6 @@
                         sendProgressEl.textContent = `${progress.toFixed(1)}%`;
                     }
                     
-                    // 短い待ち時間を設けてブラウザの負荷を軽減
                     await new Promise(resolve => setTimeout(resolve, 5)); 
                 }
 
