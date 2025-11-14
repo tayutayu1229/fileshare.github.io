@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>P2P File Sharer</title>
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <style>
+        body { font-family: sans-serif; padding: 20px; max-width: 600px; margin: auto; }
+        h2 { border-bottom: 2px solid #eee; padding-bottom: 5px; }
+        .box { border: 1px solid #ccc; padding: 15px; margin-bottom: 20px; border-radius: 5px; }
+        #status { font-weight: bold; color: blue; }
+        input[type="file"] { margin-top: 10px; }
+    </style>
+</head>
+<body>
+    <h1>🤝 サーバーレス・ファイル共有</h1>
+    <p>このサービスはPeerJSの無料シグナリングサーバーを利用し、ファイルデータはブラウザ間で直接転送されます。</p>
+
+    <div class="box">
+        <h2>① 接続状況</h2>
+        <p>ステータス: <span id="status">未接続</span></p>
+        <p>あなたのID: <strong id="my-id">...ロード中...</strong></p>
+    </div>
+
+    <div class="box">
+        <h2>② ファイルの送信</h2>
+        <p>相手にこのIDを伝えてください。相手が接続したらファイルを送信できます。</p>
+        <label for="target-id">相手のIDを入力:</label>
+        <input type="text" id="target-id" placeholder="相手のID">
+        <button onclick="connectToPeer()">接続する</button>
+
+        <hr>
+
+        <label for="file-input">送信したいファイル:</label>
+        <input type="file" id="file-input">
+        <button onclick="sendFile()" disabled id="send-btn">送信開始</button>
+        <p id="send-log" style="color: green;"></p>
+    </div>
+
+    <div class="box">
+        <h2>③ ファイルの受信</h2>
+        <p>相手からの接続を待っています...</p>
+        <div id="receive-log"></div>
+    </div>
+
+    <script>
+        // PeerJSを読み込む（シグナリングサーバーとして機能する外部サービス）
+        const peer = new Peer();
+        const myIdElement = document.getElementById('my-id');
+        const statusElement = document.getElementById('status');
+        const sendBtn = document.getElementById('send-btn');
+        let connection; // 確立された接続を保持するための変数
+
+        // ----------------------------------------------------
+        // A. ピア（自分自身）の初期化
+        // ----------------------------------------------------
+
+        peer.on('open', (id) => {
+            // 自分のユニークIDが確定した
+            myIdElement.textContent = id;
+            statusElement.textContent = '準備完了';
+            statusElement.style.color = 'green';
+        });
+
+        peer.on('error', (err) => {
+            console.error(err);
+            statusElement.textContent = 'エラーが発生しました';
+            statusElement.style.color = 'red';
+        });
+
+        // ----------------------------------------------------
+        // B. 相手からの接続を受信したとき（受信側）
+        // ----------------------------------------------------
+
+        peer.on('connection', (conn) => {
+            handleConnection(conn, true); // 第2引数: true=受信側
+        });
+
+        // ----------------------------------------------------
+        // C. 相手に接続を開始するとき（送信側）
+        // ----------------------------------------------------
+
+        function connectToPeer() {
+            const targetId = document.getElementById('target-id').value;
+            if (!targetId || targetId === peer.id) {
+                alert('有効な相手のIDを入力してください。');
+                return;
+            }
+            statusElement.textContent = '接続中...';
+            // 相手IDを指定して接続開始
+            const conn = peer.connect(targetId);
+            handleConnection(conn, false); // 第2引数: false=送信側
+        }
+
+        // ----------------------------------------------------
+        // D. 接続確立後の共通処理
+        // ----------------------------------------------------
+
+        function handleConnection(conn, isReceiver) {
+            connection = conn;
+
+            conn.on('open', () => {
+                statusElement.textContent = `接続完了 (${isReceiver ? '受信側' : '送信側'})`;
+                statusElement.style.color = 'purple';
+                sendBtn.disabled = false; // 接続できたら送信ボタンを有効化
+
+                // 相手にメタデータ（ファイル名、サイズ）を送る準備
+                conn.send({
+                    type: 'metadata',
+                    message: isReceiver ? '接続を確立しました！' : '接続が確立されました！'
+                });
+            });
+
+            conn.on('data', (data) => {
+                if (data.type === 'metadata') {
+                    // ファイル名とサイズを受信（転送前）
+                    handleMetadata(data);
+                } else if (data.type === 'file-chunk') {
+                    // ファイルの断片を受信
+                    handleChunk(data);
+                }
+            });
+
+            conn.on('close', () => {
+                statusElement.textContent = '接続が切断されました';
+                statusElement.style.color = 'red';
+                sendBtn.disabled = true;
+            });
+        }
+
+        // ----------------------------------------------------
+        // E. 送信処理（送信側）
+        // ----------------------------------------------------
+
+        function sendFile() {
+            if (!connection || connection.open === false) {
+                alert('まず相手と接続してください。');
+                return;
+            }
+
+            const fileInput = document.getElementById('file-input');
+            const file = fileInput.files[0];
+            const sendLog = document.getElementById('send-log');
+
+            if (!file) {
+                alert('ファイルを選択してください。');
+                return;
+            }
+
+            const chunkSize = 16 * 1024; // 16KB ずつに分割
+            const totalChunks = Math.ceil(file.size / chunkSize);
+            let offset = 0;
+            let chunkCount = 0;
+
+            // 1. メタデータを送信
+            connection.send({
+                type: 'metadata',
+                name: file.name,
+                size: file.size,
+                totalChunks: totalChunks
+            });
+            sendLog.textContent = `メタデータ送信完了: ${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)`;
+
+            // 2. ファイルを分割して送信
+            function sendNextChunk() {
+                if (offset >= file.size) {
+                    sendLog.textContent = `✅ 全てのファイル (${file.name}) の送信が完了しました！`;
+                    return;
+                }
+
+                const slice = file.slice(offset, offset + chunkSize);
+                const reader = new FileReader();
+
+                reader.onload = (event) => {
+                    const chunkData = event.target.result;
+
+                    // WebRTCのDataChannelで送信できるのはArrayBufferなので変換
+                    connection.send({
+                        type: 'file-chunk',
+                        chunk: chunkData,
+                        offset: offset
+                    });
+                    
+                    offset += chunkSize;
+                    chunkCount++;
+                    
+                    // 進捗表示
+                    const progress = Math.min(100, (offset / file.size) * 100).toFixed(1);
+                    sendLog.textContent = `送信中... (${chunkCount}/${totalChunks} | ${progress}%)`;
+                    
+                    // 次のチャンクを非同期で送信
+                    setTimeout(sendNextChunk, 10); // 短い待ち時間を設けてブラウザの負荷を軽減
+                };
+
+                reader.readAsArrayBuffer(slice);
+            }
+
+            sendNextChunk();
+        }
+
+        // ----------------------------------------------------
+        // F. 受信処理（受信側）
+        // ----------------------------------------------------
+
+        let receivedBuffer = [];
+        let metadata = null;
+        let receivedBytes = 0;
+        const receiveLog = document.getElementById('receive-log');
+
+        function handleMetadata(data) {
+            if (data.name && data.size) {
+                // 新しいファイル転送開始
+                metadata = data;
+                receivedBuffer = [];
+                receivedBytes = 0;
+                receiveLog.innerHTML = `<p style="color: blue;">ファイル受信開始: <strong>${data.name}</strong> (${(data.size / 1024 / 1024).toFixed(2)} MB)</p>`;
+            }
+        }
+
+        function handleChunk(data) {
+            if (!metadata) return;
+
+            receivedBuffer.push(data.chunk);
+            receivedBytes += data.chunk.byteLength;
+
+            const progress = Math.min(100, (receivedBytes / metadata.size) * 100).toFixed(1);
+            receiveLog.innerHTML = `<p style="color: blue;">受信中... ${metadata.name} (${progress}%)</p>`;
+
+            // 全てのチャンクを受信完了したかチェック
+            if (receivedBytes >= metadata.size) {
+                receiveLog.innerHTML = `<p style="color: green;">✅ 受信完了: <strong>${metadata.name}</strong></p>`;
+                
+                // ArrayBufferの配列を一つのBlobに結合
+                const receivedFile = new Blob(receivedBuffer);
+                
+                // ダウンロードリンクを生成
+                const downloadUrl = URL.createObjectURL(receivedFile);
+                const a = document.createElement('a');
+                a.href = downloadUrl;
+                a.download = metadata.name;
+                a.textContent = `ダウンロード: ${metadata.name} (クリックして保存)`;
+                a.style.display = 'block';
+                a.style.marginTop = '10px';
+                
+                receiveLog.appendChild(a);
+                
+                // メモリを解放
+                URL.revokeObjectURL(downloadUrl);
+                metadata = null;
+            }
+        }
+
+    </script>
+</body>
+</html>
