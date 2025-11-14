@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>統合指令・防災システム | Integrated Command & Disaster Prevention</title>
+    
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+          integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+          crossorigin=""/>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+            integrity="sha256-20n6sB8s5eOaRW88AxZfSjSH2yAHDvR+y2ftc8wQRV2M="
+            crossorigin=""></script>
+            
+    <style>
+        /* == COMMAND CENTER STYLING == */
+        :root {
+            --bg-color: #121212;
+            --main-text-color: #00ffcc; /* ネオングリーン */
+            --panel-bg: #1e1e1e;
+            --border-color: #333;
+            --warning-color: #ffcc00; /* 黄色 */
+            --danger-color: #ff3333; /* 赤色 */
+            --normal-color: #0099ff; /* 青色 */
+            --font-mono: 'Roboto Mono', monospace;
+        }
+        body {
+            font-family: var(--font-mono);
+            background-color: var(--bg-color);
+            color: var(--main-text-color);
+            margin: 0;
+            padding: 0;
+            display: flex;
+            height: 100vh;
+            overflow: hidden;
+            font-size: 14px;
+        }
+        .header {
+            width: 100%;
+            background-color: #000;
+            color: var(--main-text-color);
+            padding: 10px 20px;
+            font-size: 1.5em;
+            text-align: center;
+            border-bottom: 2px solid var(--main-text-color);
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.5);
+            position: fixed;
+            top: 0;
+            z-index: 1000;
+        }
+        .container {
+            display: flex;
+            width: 100%;
+            padding-top: 55px; /* ヘッダーの高さ分調整 */
+        }
+
+        /* 左側パネル (地図 & 運行情報) */
+        .left-column {
+            flex: 2; /* 2/3の幅 */
+            display: flex;
+            flex-direction: column;
+        }
+        #map {
+            flex-grow: 1;
+            background: #000;
+            border-right: 2px solid var(--border-color);
+        }
+        #weather-display {
+            padding: 15px;
+            background-color: var(--panel-bg);
+            border-top: 1px solid var(--border-color);
+            min-height: 100px;
+        }
+
+        /* 右側パネル (制御 & ログ) */
+        .right-column {
+            flex: 1; /* 1/3の幅 */
+            display: flex;
+            flex-direction: column;
+            padding: 15px;
+            background-color: var(--panel-bg);
+            border-left: 2px solid var(--border-color);
+            overflow-y: auto;
+        }
+        .panel {
+            margin-bottom: 20px;
+            padding: 10px;
+            border: 1px solid var(--border-color);
+            border-radius: 5px;
+            background-color: #282828;
+        }
+        h2 {
+            margin-top: 0;
+            color: var(--normal-color);
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 5px;
+            font-size: 1.1em;
+        }
+
+        /* 運行ステータス表示 */
+        #line-status-display div {
+            padding: 8px;
+            margin-bottom: 5px;
+            border-left: 5px solid;
+            font-weight: bold;
+            display: flex;
+            justify-content: space-between;
+        }
+        .status-normal { border-color: var(--main-text-color); color: var(--main-text-color); }
+        .status-delayed { border-color: var(--warning-color); color: var(--warning-color); }
+        .status-stopped { border-color: var(--danger-color); color: var(--danger-color); }
+
+        /* コントロールパネル */
+        .control-input {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 10px;
+        }
+        .control-input select, .control-input button {
+            padding: 8px;
+            border: 1px solid var(--border-color);
+            background-color: #383838;
+            color: var(--main-text-color);
+            cursor: pointer;
+            border-radius: 3px;
+        }
+        .control-input select { flex-grow: 1; }
+        .control-input button:hover { background-color: var(--border-color); }
+
+        /* ログエリア */
+        #event-log {
+            flex-grow: 1;
+            height: 300px;
+            overflow-y: auto;
+            border: 1px solid var(--border-color);
+            padding: 10px;
+            background-color: #000;
+        }
+        .log-entry {
+            padding: 3px 0;
+            border-bottom: 1px dotted #333;
+        }
+        .log-warn { color: var(--warning-color); }
+        .log-alert { color: var(--danger-color); font-weight: bold; }
+        .log-info { color: var(--normal-color); }
+    </style>
+</head>
+<body>
+    <div class="header">
+        統合指令・防災システム V1.0 (Integrated Command & Disaster Prevention)
+    </div>
+
+    <div class="container">
+        <div class="left-column">
+            <div id="map"></div>
+            <div id="weather-display" class="panel">
+                <h2>📡 リアルタイム気象情報</h2>
+                <div id="weather-info">地図をクリックして地点を設定してください。</div>
+            </div>
+        </div>
+
+        <div class="right-column">
+            <div class="panel">
+                <h2>🚦 運行状況サマリー</h2>
+                <div id="line-status-display">
+                    </div>
+            </div>
+
+            <div class="panel">
+                <h2>⚠️ 運行指令 (シミュレーション)</h2>
+                <div class="control-input">
+                    <select id="line-select"></select>
+                    <select id="status-select">
+                        <option value="normal">通常運転</option>
+                        <option value="delayed">遅延</option>
+                        <option value="stopped">運転見合わせ</option>
+                    </select>
+                </div>
+                <div class="control-input">
+                    <button onclick="updateLineStatus()">運行状況更新</button>
+                    <button onclick="simulateDisasterEvent()">災害イベント発生</button>
+                </div>
+            </div>
+
+            <div class="panel" style="flex-grow: 1;">
+                <h2>📜 イベントログ</h2>
+                <div id="event-log"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // 設定
+        const OPEN_WEATHER_API_KEY = "YOUR_OPENWEATHERMAP_API_KEY"; // **ご自身のAPIキーに置き換えてください**
+        const MAP_DEFAULT_CENTER = [35.6895, 139.6917]; // 東京駅周辺を初期中心に設定
+        const INITIAL_ZOOM = 10;
+        
+        // 運行路線データ (シミュレーション用)
+        let lines = {
+            'Line_A': { name: '東日本ラインA', status: 'normal', delay: '定刻', lat: 35.70, lon: 139.75 },
+            'Line_B': { name: '東日本ラインB', status: 'normal', delay: '定刻', lat: 35.55, lon: 139.60 },
+            'Line_C': { name: '西日本ラインC', status: 'normal', delay: '定刻', lat: 34.69, lon: 135.50 }
+        };
+
+        // DOM要素
+        const lineStatusDisplayEl = document.getElementById('line-status-display');
+        const lineSelectEl = document.getElementById('line-select');
+        const statusSelectEl = document.getElementById('status-select');
+        const weatherInfoEl = document.getElementById('weather-info');
+        const eventLogEl = document.getElementById('event-log');
+
+        let map = null;
+        let weatherMarker = null;
+
+        // =========================================================
+        // I. 初期化
+        // =========================================================
+
+        document.addEventListener('DOMContentLoaded', () => {
+            initMap();
+            initLineStatusDisplay();
+            renderLineStatus();
+            logEvent("システム", "起動完了。地図、運行情報、制御パネルの初期化に成功。", "info");
+        });
+
+        function initMap() {
+            // Leafletマップの初期化
+            map = L.map('map').setView(MAP_DEFAULT_CENTER, INITIAL_ZOOM);
+
+            // OpenStreetMapのタイルレイヤーを追加 (鉄道指令システムのベースマップとして利用)
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                maxZoom: 18,
+                attribution: '&copy; <a href="http://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+            }).addTo(map);
+
+            // マップクリックイベントを設定
+            map.on('click', onMapClick);
+
+            // 路線マーカーを追加
+            Object.keys(lines).forEach(key => {
+                const line = lines[key];
+                L.marker([line.lat, line.lon]).addTo(map)
+                    .bindPopup(`<b>${line.name}</b><br>運行状況: ${line.status === 'normal' ? '通常' : '異常'}`).openPopup();
+            });
+        }
+        
+        function initLineStatusDisplay() {
+            Object.keys(lines).forEach(key => {
+                const option = document.createElement('option');
+                option.value = key;
+                option.textContent = lines[key].name;
+                lineSelectEl.appendChild(option);
+            });
+        }
+
+
+        // =========================================================
+        // II. 地図・気象情報 (外部API連携)
+        // =========================================================
+        
+        function onMapClick(e) {
+            const lat = e.latlng.lat;
+            const lon = e.latlng.lng;
+            logEvent("地理情報", `地図上のクリック座標を設定: Lat ${lat.toFixed(4)}, Lon ${lon.toFixed(4)}`, "info");
+
+            // マーカーを更新または新規作成
+            if (weatherMarker) {
+                weatherMarker.setLatLng(e.latlng);
+            } else {
+                weatherMarker = L.marker(e.latlng).addTo(map)
+                    .bindPopup("気象観測地点").openPopup();
+            }
+
+            // 気象情報を取得
+            fetchWeather(lat, lon);
+        }
+
+        async function fetchWeather(lat, lon) {
+            if (OPEN_WEATHER_API_KEY === "YOUR_OPENWEATHERMAP_API_KEY") {
+                weatherInfoEl.innerHTML = `<span style="color: var(--danger-color);">⚠️ APIキーが設定されていません。天気情報は利用できません。</span>`;
+                return;
+            }
+
+            const url = `https://api.openweathermap.org/data/2.5/weather?lat=${lat}&lon=${lon}&appid=${OPEN_WEATHER_API_KEY}&units=metric&lang=ja`;
+
+            try {
+                weatherInfoEl.innerHTML = "データを取得中...";
+                const response = await fetch(url);
+                const data = await response.json();
+
+                if (data.cod !== 200) {
+                    throw new Error(data.message);
+                }
+
+                // 摂氏に変換
+                const tempC = data.main.temp.toFixed(1);
+                const weatherDesc = data.weather[0].description;
+                const windSpeed = data.wind.speed.toFixed(1);
+
+                weatherInfoEl.innerHTML = `
+                    <p><b>地点: ${data.name}</b></p>
+                    <p>気温: ${tempC} ℃</p>
+                    <p>天候: ${weatherDesc}</p>
+                    <p>風速: ${windSpeed} m/s</p>
+                `;
+                
+                // 強風注意報シミュレーション
+                if (windSpeed >= 15) {
+                    logEvent("気象警報", `強風注意報: ${data.name}で風速 ${windSpeed}m/sを観測。運行に影響の可能性。`, "alert");
+                }
+
+            } catch (error) {
+                weatherInfoEl.innerHTML = `<span style="color: var(--danger-color);">エラー: 気象データ取得失敗 (${error.message})</span>`;
+                logEvent("気象警報", `気象データ取得中に致命的なエラーが発生: ${error.message}`, "alert");
+            }
+        }
+
+        // =========================================================
+        // III. 運行指令・シミュレーション
+        // =========================================================
+        
+        function renderLineStatus() {
+            lineStatusDisplayEl.innerHTML = '';
+            Object.keys(lines).forEach(key => {
+                const line = lines[key];
+                const statusClass = line.status === 'normal' ? 'status-normal' : 
+                                    line.status === 'delayed' ? 'status-delayed' : 'status-stopped';
+                
+                const statusText = line.status === 'normal' ? '通常' : 
+                                   line.status === 'delayed' ? '遅延中' : '見合わせ';
+                
+                const delayText = line.delay === '定刻' ? '' : ` (${line.delay})`;
+
+                const div = document.createElement('div');
+                div.className = statusClass;
+                div.innerHTML = `
+                    <span>${line.name}</span>
+                    <span>${statusText}${delayText}</span>
+                `;
+                lineStatusDisplayEl.appendChild(div);
+            });
+        }
+
+        function updateLineStatus() {
+            const lineId = lineSelectEl.value;
+            const newStatus = statusSelectEl.value;
+            const lineName = lines[lineId].name;
+
+            let logMessage = "";
+            let logType = "info";
+
+            lines[lineId].status = newStatus;
+            
+            if (newStatus === 'delayed') {
+                lines[lineId].delay = '約15分';
+                logMessage = `${lineName}に対し、運行遅延 (約15分) を指令。要因調査中。`;
+                logType = "warn";
+            } else if (newStatus === 'stopped') {
+                lines[lineId].delay = '不明';
+                logMessage = `🚨 ${lineName}に対し、全線運転見合わせを指令。直ちに代替輸送手段を確保せよ。`;
+                logType = "alert";
+            } else {
+                lines[lineId].delay = '定刻';
+                logMessage = `${lineName}の運行状況を通常運転に復旧。`;
+            }
+
+            renderLineStatus();
+            logEvent("運行指令", logMessage, logType);
+        }
+
+        function simulateDisasterEvent() {
+            // 全路線に影響を与える災害イベントをシミュレーション
+            const affectedLines = [];
+            
+            Object.keys(lines).forEach(key => {
+                if (Math.random() > 0.3) { // 70%の確率で影響
+                    lines[key].status = 'stopped';
+                    lines[key].delay = '終日見合わせ';
+                    affectedLines.push(lines[key].name);
+                }
+            });
+
+            if (affectedLines.length > 0) {
+                renderLineStatus();
+                logEvent("システム警報", `🚨 広域災害発生！ ${affectedLines.join(', ')}の運行を即時見合わせ。全人員配置を要請。`, "alert");
+            } else {
+                logEvent("システム警報", "災害イベントを試行しましたが、影響は検出されませんでした。", "info");
+            }
+        }
+        
+        // =========================================================
+        // IV. イベントログ
+        // =========================================================
+
+        function logEvent(source, message, type = "info") {
+            const entry = document.createElement('div');
+            const timestamp = new Date().toLocaleTimeString('ja-JP');
+            entry.className = 'log-entry';
+            
+            let typeClass = '';
+            if (type === 'warn') {
+                typeClass = 'log-warn';
+            } else if (type === 'alert') {
+                typeClass = 'log-alert';
+            } else {
+                typeClass = 'log-info';
+            }
+
+            entry.innerHTML = `<span class="${typeClass}">[${timestamp}] [${source}] ${message}</span>`;
+            
+            // 最新のログを上に追加
+            eventLogEl.prepend(entry);
+
+            // ログが多すぎたら古いものを削除
+            if (eventLogEl.children.length > 100) {
+                eventLogEl.removeChild(eventLogEl.lastChild);
+            }
+        }
+    </script>
+</body>
+</html>
