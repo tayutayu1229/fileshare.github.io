@@ -3,254 +3,554 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>P2P File Sharer</title>
+    <title>⚡️ P2P File Drop (共有コード)</title>
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&display=swap" rel="stylesheet">
     <style>
-        body { font-family: sans-serif; padding: 20px; max-width: 600px; margin: auto; }
-        h2 { border-bottom: 2px solid #eee; padding-bottom: 5px; }
-        .box { border: 1px solid #ccc; padding: 15px; margin-bottom: 20px; border-radius: 5px; }
-        #status { font-weight: bold; color: blue; }
-        input[type="file"] { margin-top: 10px; }
+        :root {
+            --primary-color: #007bff;
+            --secondary-color: #6c757d;
+            --success-color: #28a745;
+            --danger-color: #dc3545;
+            --bg-color: #f8f9fa;
+            --card-bg: #ffffff;
+            --border-color: #e9ecef;
+        }
+        body {
+            font-family: 'Roboto', sans-serif;
+            background-color: var(--bg-color);
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            justify-content: center;
+            min-height: 100vh;
+        }
+        .container {
+            width: 100%;
+            max-width: 900px;
+        }
+        h1 {
+            color: var(--primary-color);
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .card {
+            background-color: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
+        }
+        /* 接続セクション */
+        .connection-info {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            margin-bottom: 10px;
+        }
+        #status {
+            font-weight: 700;
+            padding: 5px 10px;
+            border-radius: 4px;
+        }
+        .status-ready { background-color: #d4edda; color: var(--success-color); }
+        .status-connecting { background-color: #fff3cd; color: #856404; }
+        .status-error, .status-disconnected { background-color: #f8d7da; color: var(--danger-color); }
+
+        /* 入力エリア */
+        .input-group {
+            display: flex;
+            gap: 10px;
+        }
+        .input-group input[type="text"] {
+            flex-grow: 1;
+            padding: 10px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+        }
+        .input-group button {
+            padding: 10px 20px;
+            background-color: var(--primary-color);
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: background-color 0.2s;
+            flex-grow: 1; /* ボタンも横幅を広げる */
+        }
+        .input-group button:hover:not(:disabled) {
+            background-color: #0056b3;
+        }
+        .input-group button:disabled {
+            background-color: var(--secondary-color);
+            cursor: not-allowed;
+        }
+
+        /* ファイルドロップエリア */
+        #drop-area {
+            border: 2px dashed var(--primary-color);
+            border-radius: 10px;
+            padding: 30px;
+            text-align: center;
+            margin-top: 15px;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+        #drop-area.drag-over {
+            background-color: #e9f0ff;
+        }
+
+        /* ログ・進捗表示 */
+        .log-item {
+            padding: 10px 0;
+            border-bottom: 1px dotted var(--border-color);
+        }
+        .log-item:last-child {
+            border-bottom: none;
+        }
+        .progress-bar-container {
+            width: 100%;
+            background-color: #f0f0f0;
+            border-radius: 5px;
+            margin-top: 5px;
+        }
+        .progress-bar {
+            height: 15px;
+            background-color: var(--success-color);
+            border-radius: 5px;
+            transition: width 0.1s ease-in-out;
+            text-align: center;
+            color: white;
+            font-size: 0.8em;
+        }
+        .download-link {
+            display: block;
+            margin-top: 10px;
+            color: var(--primary-color);
+            text-decoration: none;
+            font-weight: bold;
+        }
+        .download-link:hover {
+            text-decoration: underline;
+        }
     </style>
 </head>
 <body>
-    <h1>🤝 サーバーレス・ファイル共有</h1>
-    <p>このサービスはPeerJSの無料シグナリングサーバーを利用し、ファイルデータはブラウザ間で直接転送されます。</p>
+    <div class="container">
+        <h1>⚡️ P2P File Drop (共有コード)</h1>
+        <p>※ ファイルデータは端末間で直接転送されます。接続にはPeerJSの無料サービスを使用します。</p>
 
-    <div class="box">
-        <h2>① 接続状況</h2>
-        <p>ステータス: <span id="status">未接続</span></p>
-        <p>あなたのID: <strong id="my-id">...ロード中...</strong></p>
-    </div>
+        <div class="card">
+            <h2>🔗 接続設定</h2>
+            <div class="connection-info">
+                <p>現在の状態:</p> <div id="status" class="status-connecting">初期化中...</div>
+            </div>
+            
+            <p><strong>最初に接続する方がホスト（待機）</strong>、相手がゲスト（接続）です。</p>
+            <label for="shared-pin"><strong>共有コード (PIN):</strong> お二人で決めた任意のコードを入力</label>
+            <div class="input-group">
+                <input type="text" id="shared-pin" placeholder="例: 1234, secret, Hanako" maxlength="15">
+                <button onclick="startHost()" id="host-btn">ホストとして待機</button>
+                <button onclick="startGuest()" id="guest-btn">ゲストとして接続</button>
+            </div>
+        </div>
 
-    <div class="box">
-        <h2>② ファイルの送信</h2>
-        <p>相手にこのIDを伝えてください。相手が接続したらファイルを送信できます。</p>
-        <label for="target-id">相手のIDを入力:</label>
-        <input type="text" id="target-id" placeholder="相手のID">
-        <button onclick="connectToPeer()">接続する</button>
+        <div class="card">
+            <h2>📤 ファイル送信</h2>
+            <div id="drop-area">
+                <p>ファイルをここにドラッグ＆ドロップ</p>
+                <p>または</p>
+                <input type="file" id="file-input" multiple hidden>
+                <button onclick="document.getElementById('file-input').click()" id="select-btn" disabled>ファイルを選択</button>
+            </div>
+            <p style="margin-top: 10px;">接続完了後、選択されたファイルは自動で送信されます。</p>
+            <h3>送信キュー</h3>
+            <div id="send-queue-log">（待機中のファイルはありません）</div>
+        </div>
 
-        <hr>
-
-        <label for="file-input">送信したいファイル:</label>
-        <input type="file" id="file-input">
-        <button onclick="sendFile()" disabled id="send-btn">送信開始</button>
-        <p id="send-log" style="color: green;"></p>
-    </div>
-
-    <div class="box">
-        <h2>③ ファイルの受信</h2>
-        <p>相手からの接続を待っています...</p>
-        <div id="receive-log"></div>
+        <div class="card">
+            <h2>📥 ファイル受信ログ</h2>
+            <div id="receive-log">接続を待っています...</div>
+        </div>
     </div>
 
     <script>
-        // PeerJSを読み込む（シグナリングサーバーとして機能する外部サービス）
-        const peer = new Peer();
-        const myIdElement = document.getElementById('my-id');
-        const statusElement = document.getElementById('status');
-        const sendBtn = document.getElementById('send-btn');
-        let connection; // 確立された接続を保持するための変数
+        // 設定
+        const PEERJS_HOST = 'peerjs-server.com'; 
+        const PEERJS_PORT = 443;
+        const PEERJS_PATH = '/';
+        const CHUNK_SIZE = 16 * 1024; // 16KB
+        const HOST_PREFIX = 'p2p-file-host-';
 
+        // DOM要素
+        const statusEl = document.getElementById('status');
+        const pinEl = document.getElementById('shared-pin');
+        const hostBtn = document.getElementById('host-btn');
+        const guestBtn = document.getElementById('guest-btn');
+        const dropAreaEl = document.getElementById('drop-area');
+        const sendQueueLogEl = document.getElementById('send-queue-log');
+        const receiveLogEl = document.getElementById('receive-log');
+        const fileInputEl = document.getElementById('file-input');
+        const selectBtn = document.getElementById('select-btn');
+
+        // 状態変数
+        let peer = null;
+        let connection = null;
+        let fileQueue = [];
+        let isSending = false;
+        let isHostMode = false;
+
+        // 受信データ格納用
+        let receivedFiles = {}; 
+        
         // ----------------------------------------------------
-        // A. ピア（自分自身）の初期化
-        // ----------------------------------------------------
-
-        peer.on('open', (id) => {
-            // 自分のユニークIDが確定した
-            myIdElement.textContent = id;
-            statusElement.textContent = '準備完了';
-            statusElement.style.color = 'green';
-        });
-
-        peer.on('error', (err) => {
-            console.error(err);
-            statusElement.textContent = 'エラーが発生しました';
-            statusElement.style.color = 'red';
-        });
-
-        // ----------------------------------------------------
-        // B. 相手からの接続を受信したとき（受信側）
-        // ----------------------------------------------------
-
-        peer.on('connection', (conn) => {
-            handleConnection(conn, true); // 第2引数: true=受信側
-        });
-
-        // ----------------------------------------------------
-        // C. 相手に接続を開始するとき（送信側）
+        // I. 初期化と接続モードの開始
         // ----------------------------------------------------
 
-        function connectToPeer() {
-            const targetId = document.getElementById('target-id').value;
-            if (!targetId || targetId === peer.id) {
-                alert('有効な相手のIDを入力してください。');
-                return;
+        function getHostId(pin) {
+            return HOST_PREFIX + pin.trim();
+        }
+
+        function initializePeer(id = null) {
+            if (peer) peer.destroy(); // 既存のピアを破棄
+
+            updateStatus('接続ID生成中...', 'status-connecting');
+            
+            // PeerJSの初期化 (IDがnullならランダムIDが生成される)
+            peer = new Peer(id, {
+                host: PEERJS_HOST,
+                port: PEERJS_PORT,
+                path: PEERJS_PATH,
+                secure: true 
+            });
+
+            peer.on('open', (peerId) => {
+                updateStatus(isHostMode ? `ホスト待機中: ${peerId}` : 'ゲスト接続準備完了', 'status-ready');
+                pinEl.disabled = true;
+                hostBtn.disabled = true;
+                guestBtn.disabled = true;
+
+                if (!isHostMode) {
+                    // ゲストモードの場合、自動でホストに接続を試みる
+                    connectToPeer(getHostId(pinEl.value));
+                } else {
+                    // ホストモードの場合、相手からの接続を待つ
+                    peer.on('connection', (conn) => {
+                        if (connection && connection.open) {
+                            conn.close();
+                            return;
+                        }
+                        handleConnection(conn, true);
+                        receiveLogEl.innerHTML = '相手（ゲスト）からの接続を受け付けました。';
+                    });
+                }
+            });
+
+            peer.on('error', (err) => {
+                console.error("Peer Error:", err);
+                updateStatus('接続エラー', 'status-error');
+                resetState();
+            });
+
+            peer.on('close', () => {
+                console.log("Peer closed.");
+                updateStatus('切断されました', 'status-disconnected');
+                resetState();
+            });
+        }
+        
+        function resetState() {
+            connection = null;
+            isSending = false;
+            isHostMode = false;
+            pinEl.disabled = false;
+            hostBtn.disabled = false;
+            guestBtn.disabled = false;
+            selectBtn.disabled = true;
+            sendQueueLogEl.innerHTML = '（待機中のファイルはありません）';
+            if (receiveLogEl.innerHTML.includes('接続を待っています...')) {
+                // 受信ログをリセットしない
+            } else {
+                receiveLogEl.innerHTML += '<p style="color: red;">接続が切断されました。再接続してください。</p>';
             }
-            statusElement.textContent = '接続中...';
-            // 相手IDを指定して接続開始
-            const conn = peer.connect(targetId);
-            handleConnection(conn, false); // 第2引数: false=送信側
+        }
+
+        function startHost() {
+            const pin = pinEl.value.trim();
+            if (!pin) { alert('共有コードを入力してください。'); return; }
+            isHostMode = true;
+            initializePeer(getHostId(pin));
+        }
+
+        function startGuest() {
+            const pin = pinEl.value.trim();
+            if (!pin) { alert('共有コードを入力してください。'); return; }
+            isHostMode = false;
+            // ゲストはランダムIDで初期化し、ホストIDに接続する
+            initializePeer(); 
         }
 
         // ----------------------------------------------------
-        // D. 接続確立後の共通処理
+        // II. 接続開始と共通ハンドラ
         // ----------------------------------------------------
+
+        function connectToPeer(targetId) {
+            updateStatus('ホストに接続中...', 'status-connecting');
+            const conn = peer.connect(targetId, { reliable: true }); 
+            
+            conn.on('error', (err) => {
+                console.error("Connection Error:", err);
+                updateStatus('接続エラー', 'status-error');
+            });
+            
+            handleConnection(conn, false);
+        }
 
         function handleConnection(conn, isReceiver) {
             connection = conn;
+            selectBtn.disabled = false; // 接続できたらファイル選択を有効化
 
             conn.on('open', () => {
-                statusElement.textContent = `接続完了 (${isReceiver ? '受信側' : '送信側'})`;
-                statusElement.style.color = 'purple';
-                sendBtn.disabled = false; // 接続できたら送信ボタンを有効化
-
-                // 相手にメタデータ（ファイル名、サイズ）を送る準備
-                conn.send({
-                    type: 'metadata',
-                    message: isReceiver ? '接続を確立しました！' : '接続が確立されました！'
-                });
+                updateStatus('接続完了！', 'status-ready');
+                if (!isReceiver) {
+                    processQueue(); // 接続側（ゲスト）ならキュー処理開始
+                }
             });
 
             conn.on('data', (data) => {
                 if (data.type === 'metadata') {
-                    // ファイル名とサイズを受信（転送前）
                     handleMetadata(data);
                 } else if (data.type === 'file-chunk') {
-                    // ファイルの断片を受信
                     handleChunk(data);
                 }
             });
 
             conn.on('close', () => {
-                statusElement.textContent = '接続が切断されました';
-                statusElement.style.color = 'red';
-                sendBtn.disabled = true;
+                console.log("Connection closed.");
+                updateStatus('切断されました', 'status-disconnected');
+                resetState();
             });
         }
 
+        function updateStatus(text, className) {
+            statusEl.textContent = text;
+            statusEl.className = className;
+        }
+        
         // ----------------------------------------------------
-        // E. 送信処理（送信側）
+        // III. 送信処理 (キュー管理, チャンク化)
         // ----------------------------------------------------
 
-        function sendFile() {
-            if (!connection || connection.open === false) {
-                alert('まず相手と接続してください。');
+        // ファイル入力イベント
+        fileInputEl.addEventListener('change', (e) => {
+            addFilesToQueue(Array.from(e.target.files));
+            e.target.value = ''; 
+        });
+
+        // ドラッグ&ドロップイベント
+        dropAreaEl.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropAreaEl.classList.add('drag-over');
+        });
+        dropAreaEl.addEventListener('dragleave', (e) => {
+            e.preventDefault();
+            dropAreaEl.classList.remove('drag-over');
+        });
+        dropAreaEl.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropAreaEl.classList.remove('drag-over');
+            const files = Array.from(e.dataTransfer.files);
+            addFilesToQueue(files);
+        });
+
+        function addFilesToQueue(files) {
+            if (!connection || !connection.open) {
+                alert('ファイル送信には、まず相手と接続を確立してください。');
+                return;
+            }
+            files.forEach(file => {
+                const fileId = Date.now() + Math.random(); 
+                fileQueue.push({ id: fileId, file: file, status: 'Queued' });
+            });
+            renderSendQueue();
+            if (connection && connection.open && !isSending) {
+                processQueue();
+            }
+        }
+
+        function renderSendQueue() {
+            if (fileQueue.length === 0) {
+                sendQueueLogEl.innerHTML = '（待機中のファイルはありません）';
+                return;
+            }
+            sendQueueLogEl.innerHTML = fileQueue.map(item => {
+                const sizeMB = (item.file.size / 1024 / 1024).toFixed(2);
+                let html = `<div class="log-item" id="send-log-${item.id}">`;
+                html += `<span style="font-weight: bold;">[${item.status}] ${item.file.name}</span> (${sizeMB} MB)`;
+                
+                if (item.status === 'Sending') {
+                    html += `<div class="progress-bar-container">
+                                <div class="progress-bar" id="send-progress-${item.id}" style="width: 0%">0%</div>
+                             </div>`;
+                }
+                html += `</div>`;
+                return html;
+            }).join('');
+        }
+
+        async function processQueue() {
+            if (isSending || fileQueue.length === 0 || !connection || !connection.open) {
                 return;
             }
 
-            const fileInput = document.getElementById('file-input');
-            const file = fileInput.files[0];
-            const sendLog = document.getElementById('send-log');
+            isSending = true;
+            const item = fileQueue[0]; 
+            item.status = 'Sending';
+            renderSendQueue();
 
-            if (!file) {
-                alert('ファイルを選択してください。');
-                return;
-            }
-
-            const chunkSize = 16 * 1024; // 16KB ずつに分割
-            const totalChunks = Math.ceil(file.size / chunkSize);
+            const file = item.file;
+            const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
             let offset = 0;
-            let chunkCount = 0;
+            const sendProgressEl = document.getElementById(`send-progress-${item.id}`);
 
             // 1. メタデータを送信
             connection.send({
                 type: 'metadata',
+                fileId: item.id,
                 name: file.name,
                 size: file.size,
                 totalChunks: totalChunks
             });
-            sendLog.textContent = `メタデータ送信完了: ${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)`;
 
             // 2. ファイルを分割して送信
-            function sendNextChunk() {
-                if (offset >= file.size) {
-                    sendLog.textContent = `✅ 全てのファイル (${file.name}) の送信が完了しました！`;
-                    return;
-                }
+            try {
+                while (offset < file.size) {
+                    const slice = file.slice(offset, offset + CHUNK_SIZE);
+                    const chunkData = await new Promise((resolve, reject) => {
+                        const reader = new FileReader();
+                        reader.onload = (event) => resolve(event.target.result);
+                        reader.onerror = reject;
+                        reader.readAsArrayBuffer(slice);
+                    });
 
-                const slice = file.slice(offset, offset + chunkSize);
-                const reader = new FileReader();
-
-                reader.onload = (event) => {
-                    const chunkData = event.target.result;
-
-                    // WebRTCのDataChannelで送信できるのはArrayBufferなので変換
                     connection.send({
                         type: 'file-chunk',
+                        fileId: item.id,
                         chunk: chunkData,
                         offset: offset
                     });
-                    
-                    offset += chunkSize;
-                    chunkCount++;
-                    
-                    // 進捗表示
-                    const progress = Math.min(100, (offset / file.size) * 100).toFixed(1);
-                    sendLog.textContent = `送信中... (${chunkCount}/${totalChunks} | ${progress}%)`;
-                    
-                    // 次のチャンクを非同期で送信
-                    setTimeout(sendNextChunk, 10); // 短い待ち時間を設けてブラウザの負荷を軽減
-                };
 
-                reader.readAsArrayBuffer(slice);
+                    offset += CHUNK_SIZE;
+
+                    // 進捗表示を更新
+                    const progress = Math.min(100, (offset / file.size) * 100);
+                    if (sendProgressEl) {
+                        sendProgressEl.style.width = `${progress}%`;
+                        sendProgressEl.textContent = `${progress.toFixed(1)}%`;
+                    }
+                    
+                    await new Promise(resolve => setTimeout(resolve, 5)); 
+                }
+
+                // 送信完了
+                item.status = '完了';
+                fileQueue.shift(); 
+                renderSendQueue();
+                isSending = false;
+                
+                processQueue();
+
+            } catch (e) {
+                console.error("File sending failed:", e);
+                item.status = '失敗';
+                fileQueue.shift();
+                renderSendQueue();
+                isSending = false;
+                processQueue();
             }
-
-            sendNextChunk();
         }
 
         // ----------------------------------------------------
-        // F. 受信処理（受信側）
+        // IV. 受信処理 (メタデータ/チャンクの結合)
         // ----------------------------------------------------
 
-        let receivedBuffer = [];
-        let metadata = null;
-        let receivedBytes = 0;
-        const receiveLog = document.getElementById('receive-log');
-
         function handleMetadata(data) {
-            if (data.name && data.size) {
+            if (data.fileId && data.name && data.size) {
+                if (receiveLogEl.textContent.includes('接続を待っています...')) {
+                     receiveLogEl.innerHTML = ''; // 初回受信時に初期メッセージを削除
+                }
+                
                 // 新しいファイル転送開始
-                metadata = data;
-                receivedBuffer = [];
-                receivedBytes = 0;
-                receiveLog.innerHTML = `<p style="color: blue;">ファイル受信開始: <strong>${data.name}</strong> (${(data.size / 1024 / 1024).toFixed(2)} MB)</p>`;
+                receivedFiles[data.fileId] = {
+                    metadata: data,
+                    chunks: [],
+                    receivedBytes: 0,
+                    logElement: createReceiveLogElement(data)
+                };
             }
+        }
+
+        function createReceiveLogElement(data) {
+            const sizeMB = (data.size / 1024 / 1024).toFixed(2);
+            const div = document.createElement('div');
+            div.className = 'log-item';
+            div.id = `receive-log-${data.fileId}`;
+            div.innerHTML = `
+                <span>受信中: <strong>${data.name}</strong> (${sizeMB} MB)</span>
+                <div class="progress-bar-container">
+                    <div class="progress-bar" id="receive-progress-${data.fileId}" style="width: 0%">0%</div>
+                </div>`;
+            receiveLogEl.prepend(div);
+            return div;
         }
 
         function handleChunk(data) {
-            if (!metadata) return;
+            const fileItem = receivedFiles[data.fileId];
+            if (!fileItem) return;
 
-            receivedBuffer.push(data.chunk);
-            receivedBytes += data.chunk.byteLength;
+            fileItem.chunks.push(data.chunk);
+            fileItem.receivedBytes += data.chunk.byteLength;
 
-            const progress = Math.min(100, (receivedBytes / metadata.size) * 100).toFixed(1);
-            receiveLog.innerHTML = `<p style="color: blue;">受信中... ${metadata.name} (${progress}%)</p>`;
+            const progress = Math.min(100, (fileItem.receivedBytes / fileItem.metadata.size) * 100);
+            const progressBar = document.getElementById(`receive-progress-${data.fileId}`);
+            if (progressBar) {
+                progressBar.style.width = `${progress}%`;
+                progressBar.textContent = `${progress.toFixed(1)}%`;
+            }
 
             // 全てのチャンクを受信完了したかチェック
-            if (receivedBytes >= metadata.size) {
-                receiveLog.innerHTML = `<p style="color: green;">✅ 受信完了: <strong>${metadata.name}</strong></p>`;
-                
-                // ArrayBufferの配列を一つのBlobに結合
-                const receivedFile = new Blob(receivedBuffer);
-                
-                // ダウンロードリンクを生成
+            if (fileItem.receivedBytes >= fileItem.metadata.size) {
+                const receivedFile = new Blob(fileItem.chunks);
                 const downloadUrl = URL.createObjectURL(receivedFile);
+                
                 const a = document.createElement('a');
                 a.href = downloadUrl;
-                a.download = metadata.name;
-                a.textContent = `ダウンロード: ${metadata.name} (クリックして保存)`;
-                a.style.display = 'block';
-                a.style.marginTop = '10px';
+                a.download = fileItem.metadata.name;
+                a.className = 'download-link';
+                a.textContent = `⬇️ ダウンロード完了: ${fileItem.metadata.name} (クリックして保存)`;
                 
-                receiveLog.appendChild(a);
-                
-                // メモリを解放
-                URL.revokeObjectURL(downloadUrl);
-                metadata = null;
+                // ダウンロード開始後にURLを解放
+                a.addEventListener('click', () => {
+                    setTimeout(() => {
+                        URL.revokeObjectURL(downloadUrl);
+                    }, 500); 
+                }, { once: true });
+
+                // ログ表示の更新
+                const logEl = fileItem.logElement;
+                if (logEl) {
+                    const progressContainer = logEl.querySelector('.progress-bar-container');
+                    if(progressContainer) progressContainer.remove();
+                    logEl.appendChild(a);
+                    logEl.querySelector('span').textContent = '受信完了';
+                }
+
+                // データ解放
+                delete receivedFiles[data.fileId];
             }
         }
-
     </script>
 </body>
 </html>
