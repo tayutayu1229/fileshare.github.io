@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>⚡️ P2P File Drop (共有コード)</title>
+    <title>⚡️ P2P File Drop V2 (共有コード & デバッグ)</title>
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&display=swap" rel="stylesheet">
     <style>
@@ -15,6 +15,7 @@
             --bg-color: #f8f9fa;
             --card-bg: #ffffff;
             --border-color: #e9ecef;
+            --info-color: #17a2b8;
         }
         body {
             font-family: 'Roboto', sans-serif;
@@ -58,6 +59,7 @@
         .status-ready { background-color: #d4edda; color: var(--success-color); }
         .status-connecting { background-color: #fff3cd; color: #856404; }
         .status-error, .status-disconnected { background-color: #f8d7da; color: var(--danger-color); }
+        .status-success { background-color: #d1ecf1; color: var(--info-color); }
 
         /* 入力エリア */
         .input-group {
@@ -78,7 +80,7 @@
             border-radius: 4px;
             cursor: pointer;
             transition: background-color 0.2s;
-            flex-grow: 1; /* ボタンも横幅を広げる */
+            flex-grow: 1;
         }
         .input-group button:hover:not(:disabled) {
             background-color: #0056b3;
@@ -135,23 +137,39 @@
         .download-link:hover {
             text-decoration: underline;
         }
+        
+        /* デバッグログ */
+        #debug-log-card {
+            background-color: #212529;
+            color: #ffffff;
+            font-family: monospace;
+            font-size: 0.9em;
+            overflow-x: auto;
+            border-radius: 8px;
+            padding: 10px;
+        }
+        .debug-entry {
+            border-bottom: 1px solid #343a40;
+            padding: 5px 0;
+            white-space: pre-wrap;
+        }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>⚡️ P2P File Drop (共有コード)</h1>
+        <h1>⚡️ P2P File Drop V2 (共有コード)</h1>
         <p>※ ファイルデータは端末間で直接転送されます。接続にはPeerJSの無料サービスを使用します。</p>
 
-        <div class="card">
+        <div class="card" id="connection-card">
             <h2>🔗 接続設定</h2>
             <div class="connection-info">
                 <p>現在の状態:</p> <div id="status" class="status-connecting">初期化中...</div>
             </div>
             
-            <p><strong>最初に接続する方がホスト（待機）</strong>、相手がゲスト（接続）です。</p>
+            <p><strong>最初に接続する方がホスト（待機）</strong>、相手がゲスト（接続）です。ホストが準備できるまで、ゲストは自動で再試行します。</p>
             <label for="shared-pin"><strong>共有コード (PIN):</strong> お二人で決めた任意のコードを入力</label>
             <div class="input-group">
-                <input type="text" id="shared-pin" placeholder="例: 1234, secret, Hanako" maxlength="15">
+                <input type="text" id="shared-pin" placeholder="例: 1234, secret" maxlength="15">
                 <button onclick="startHost()" id="host-btn">ホストとして待機</button>
                 <button onclick="startGuest()" id="guest-btn">ゲストとして接続</button>
             </div>
@@ -174,6 +192,11 @@
             <h2>📥 ファイル受信ログ</h2>
             <div id="receive-log">接続を待っています...</div>
         </div>
+        
+        <div class="card">
+            <h2>🐛 デバッグ/エラーログ <small>(接続問題の確認に利用)</small></h2>
+            <div id="debug-log-card"></div>
+        </div>
     </div>
 
     <script>
@@ -182,7 +205,9 @@
         const PEERJS_PORT = 443;
         const PEERJS_PATH = '/';
         const CHUNK_SIZE = 16 * 1024; // 16KB
-        const HOST_PREFIX = 'p2p-file-host-';
+        const HOST_PREFIX = 'p2p-host-';
+        const MAX_RETRY = 10; // ゲスト側の最大リトライ回数
+        const RETRY_INTERVAL = 3000; // 3秒
 
         // DOM要素
         const statusEl = document.getElementById('status');
@@ -194,6 +219,8 @@
         const receiveLogEl = document.getElementById('receive-log');
         const fileInputEl = document.getElementById('file-input');
         const selectBtn = document.getElementById('select-btn');
+        const debugLogCardEl = document.getElementById('debug-log-card');
+        const connectionCardEl = document.getElementById('connection-card');
 
         // 状態変数
         let peer = null;
@@ -201,24 +228,77 @@
         let fileQueue = [];
         let isSending = false;
         let isHostMode = false;
+        let retryCount = 0;
 
         // 受信データ格納用
         let receivedFiles = {}; 
         
         // ----------------------------------------------------
-        // I. 初期化と接続モードの開始
+        // I. ユーティリティ
         // ----------------------------------------------------
 
+        function logDebug(message, isError = false) {
+            const entry = document.createElement('div');
+            entry.className = 'debug-entry';
+            const timestamp = new Date().toLocaleTimeString();
+            entry.textContent = `[${timestamp}] ${isError ? 'ERROR' : 'INFO'} | ${message}`;
+            entry.style.color = isError ? 'var(--danger-color)' : 'var(--info-color)';
+            debugLogCardEl.prepend(entry);
+        }
+
         function getHostId(pin) {
-            return HOST_PREFIX + pin.trim();
+            // PINに不適切な文字が含まれないか確認
+            const safePin = pin.trim().replace(/[^a-zA-Z0-9_-]/g, '');
+            return HOST_PREFIX + safePin;
+        }
+
+        function validatePin(pin) {
+            if (!pin || pin.trim().length === 0) {
+                alert('共有コードを入力してください。');
+                return false;
+            }
+            if (pin.trim().length > 15) {
+                alert('共有コードは15文字以内である必要があります。');
+                return false;
+            }
+            return true;
+        }
+
+        // ----------------------------------------------------
+        // II. 接続モードの開始と初期化
+        // ----------------------------------------------------
+
+        function resetState() {
+            logDebug("Resetting application state.");
+            if (peer) {
+                // ピア接続は切断された可能性が高いので、再初期化を推奨
+                peer.destroy(); 
+                peer = null;
+            }
+            connection = null;
+            isSending = false;
+            isHostMode = false;
+            retryCount = 0;
+            pinEl.disabled = false;
+            hostBtn.disabled = false;
+            guestBtn.disabled = false;
+            selectBtn.disabled = true;
+            connectionCardEl.style.display = 'block'; // PIN入力エリアを表示に戻す
+            
+            sendQueueLogEl.innerHTML = '（待機中のファイルはありません）';
+            if (receiveLogEl.innerHTML.includes('接続を待っています...')) {
+                // 初期メッセージはそのまま
+            } else {
+                receiveLogEl.innerHTML += '<p style="color: red;">接続が切断されました。再接続してください。</p>';
+            }
         }
 
         function initializePeer(id = null) {
-            if (peer) peer.destroy(); // 既存のピアを破棄
+            logDebug(`Initializing PeerJS with ID: ${id || 'random'}`);
+            if (peer) peer.destroy(); // 既存のピアを確実に破棄
 
             updateStatus('接続ID生成中...', 'status-connecting');
             
-            // PeerJSの初期化 (IDがnullならランダムIDが生成される)
             peer = new Peer(id, {
                 host: PEERJS_HOST,
                 port: PEERJS_PORT,
@@ -227,21 +307,21 @@
             });
 
             peer.on('open', (peerId) => {
-                updateStatus(isHostMode ? `ホスト待機中: ${peerId}` : 'ゲスト接続準備完了', 'status-ready');
-                pinEl.disabled = true;
-                hostBtn.disabled = true;
-                guestBtn.disabled = true;
-
+                logDebug(`Peer ready. ID: ${peerId}`);
+                updateStatus(isHostMode ? `ホスト待機中 (${peerId})` : 'ゲスト接続準備完了', 'status-ready');
+                
                 if (!isHostMode) {
                     // ゲストモードの場合、自動でホストに接続を試みる
-                    connectToPeer(getHostId(pinEl.value));
+                    retryConnectToHost();
                 } else {
                     // ホストモードの場合、相手からの接続を待つ
                     peer.on('connection', (conn) => {
                         if (connection && connection.open) {
+                            logDebug("Incoming connection rejected: Already connected.", true);
                             conn.close();
                             return;
                         }
+                        logDebug("Incoming connection received (Host side).");
                         handleConnection(conn, true);
                         receiveLogEl.innerHTML = '相手（ゲスト）からの接続を受け付けました。';
                     });
@@ -249,73 +329,117 @@
             });
 
             peer.on('error', (err) => {
-                console.error("Peer Error:", err);
-                updateStatus('接続エラー', 'status-error');
-                resetState();
+                logDebug(`Peer Error: ${err.type} | ${err.message}`, true);
+                if (err.type === 'peer-unavailable') {
+                    // ゲスト側で接続対象が見つからない場合はここではエラーとしない (リトライで対応)
+                } else {
+                    updateStatus('接続エラー', 'status-error');
+                    resetState();
+                }
             });
 
             peer.on('close', () => {
-                console.log("Peer closed.");
+                logDebug("Peer closed.", true);
                 updateStatus('切断されました', 'status-disconnected');
                 resetState();
             });
         }
         
-        function resetState() {
-            connection = null;
-            isSending = false;
-            isHostMode = false;
-            pinEl.disabled = false;
-            hostBtn.disabled = false;
-            guestBtn.disabled = false;
-            selectBtn.disabled = true;
-            sendQueueLogEl.innerHTML = '（待機中のファイルはありません）';
-            if (receiveLogEl.innerHTML.includes('接続を待っています...')) {
-                // 受信ログをリセットしない
-            } else {
-                receiveLogEl.innerHTML += '<p style="color: red;">接続が切断されました。再接続してください。</p>';
-            }
-        }
-
         function startHost() {
             const pin = pinEl.value.trim();
-            if (!pin) { alert('共有コードを入力してください。'); return; }
+            if (!validatePin(pin)) return;
             isHostMode = true;
+            pinEl.disabled = true;
+            hostBtn.disabled = true;
+            guestBtn.disabled = true;
             initializePeer(getHostId(pin));
         }
 
         function startGuest() {
             const pin = pinEl.value.trim();
-            if (!pin) { alert('共有コードを入力してください。'); return; }
+            if (!validatePin(pin)) return;
             isHostMode = false;
+            pinEl.disabled = true;
+            hostBtn.disabled = true;
+            guestBtn.disabled = true;
             // ゲストはランダムIDで初期化し、ホストIDに接続する
             initializePeer(); 
         }
 
         // ----------------------------------------------------
-        // II. 接続開始と共通ハンドラ
+        // III. ゲスト接続リトライロジック
         // ----------------------------------------------------
 
-        function connectToPeer(targetId) {
-            updateStatus('ホストに接続中...', 'status-connecting');
-            const conn = peer.connect(targetId, { reliable: true }); 
+        function retryConnectToHost() {
+            const targetId = getHostId(pinEl.value);
             
+            if (retryCount >= MAX_RETRY) {
+                logDebug(`Guest failed to connect after ${MAX_RETRY} retries. Target ID: ${targetId}`, true);
+                updateStatus('接続失敗', 'status-error');
+                resetState();
+                return;
+            }
+
+            logDebug(`Guest attempting connection to ${targetId} (Attempt ${retryCount + 1}/${MAX_RETRY}).`);
+            updateStatus(`ホストに接続中... (リトライ ${retryCount + 1})`, 'status-connecting');
+
+            const conn = peer.connect(targetId, { reliable: true }); 
+
+            // 接続成功またはエラーで終了するためのフラグ
+            let finished = false; 
+
+            conn.on('open', () => {
+                if (finished) return; 
+                finished = true;
+                logDebug("Connection successful (Guest side).");
+                handleConnection(conn, false);
+            });
+
             conn.on('error', (err) => {
-                console.error("Connection Error:", err);
-                updateStatus('接続エラー', 'status-error');
+                logDebug(`Connection Error during attempt: ${err.message}`, true);
+                // 接続対象がいないエラーの場合、リトライ
+                if (!finished && err.type === 'peer-unavailable') {
+                    retryCount++;
+                    setTimeout(retryConnectToHost, RETRY_INTERVAL);
+                } else if (!finished) {
+                    finished = true;
+                    // 他の致命的なエラーの場合はリセット
+                    updateStatus('接続エラー', 'status-error');
+                    resetState();
+                }
             });
             
-            handleConnection(conn, false);
+            // 接続が切れた場合もリトライが必要（ただしopen後に閉じられた場合も含む）
+            conn.on('close', () => {
+                logDebug("Connection closed during attempt or after establishment.", true);
+                if (!finished) {
+                     // openイベントが発生しなかった場合のクリーンアップ
+                     if (retryCount < MAX_RETRY) {
+                         retryCount++;
+                         setTimeout(retryConnectToHost, RETRY_INTERVAL);
+                     } else {
+                         finished = true;
+                         updateStatus('接続失敗', 'status-error');
+                         resetState();
+                     }
+                }
+            });
         }
+
+        // ----------------------------------------------------
+        // IV. 接続確立後の共通ハンドラ
+        // ----------------------------------------------------
 
         function handleConnection(conn, isReceiver) {
             connection = conn;
-            selectBtn.disabled = false; // 接続できたらファイル選択を有効化
+            retryCount = 0; // リトライをリセット
+            selectBtn.disabled = false; 
+            connectionCardEl.style.display = 'none'; // PIN入力エリアを隠す
 
             conn.on('open', () => {
-                updateStatus('接続完了！', 'status-ready');
+                updateStatus('接続完了！ P2P通信開始', 'status-success');
                 if (!isReceiver) {
-                    processQueue(); // 接続側（ゲスト）ならキュー処理開始
+                    processQueue(); 
                 }
             });
 
@@ -328,7 +452,7 @@
             });
 
             conn.on('close', () => {
-                console.log("Connection closed.");
+                logDebug("Connection permanently closed.", true);
                 updateStatus('切断されました', 'status-disconnected');
                 resetState();
             });
@@ -340,7 +464,7 @@
         }
         
         // ----------------------------------------------------
-        // III. 送信処理 (キュー管理, チャンク化)
+        // V. 送信処理 (キュー管理, チャンク化)
         // ----------------------------------------------------
 
         // ファイル入力イベント
@@ -415,6 +539,8 @@
             let offset = 0;
             const sendProgressEl = document.getElementById(`send-progress-${item.id}`);
 
+            logDebug(`Starting transfer of ${file.name}. Total chunks: ${totalChunks}`);
+            
             // 1. メタデータを送信
             connection.send({
                 type: 'metadata',
@@ -431,10 +557,15 @@
                     const chunkData = await new Promise((resolve, reject) => {
                         const reader = new FileReader();
                         reader.onload = (event) => resolve(event.target.result);
-                        reader.onerror = reject;
+                        reader.onerror = (error) => {
+                            logDebug(`FileReader error for ${file.name}: ${error}`, true);
+                            reject(error);
+                        };
                         reader.readAsArrayBuffer(slice);
                     });
 
+                    // PeerJSはDataChannelのバッファリングを自動で処理するため、
+                    // DataChannelのバッファオーバーフローを考慮したロジックは省略し、代わりにsetTimeoutで負荷軽減
                     connection.send({
                         type: 'file-chunk',
                         fileId: item.id,
@@ -451,6 +582,7 @@
                         sendProgressEl.textContent = `${progress.toFixed(1)}%`;
                     }
                     
+                    // 短い待ち時間を設けてブラウザの負荷を軽減
                     await new Promise(resolve => setTimeout(resolve, 5)); 
                 }
 
@@ -459,11 +591,12 @@
                 fileQueue.shift(); 
                 renderSendQueue();
                 isSending = false;
+                logDebug(`Transfer of ${file.name} completed.`);
                 
                 processQueue();
 
             } catch (e) {
-                console.error("File sending failed:", e);
+                logDebug(`File sending failed: ${e.message}`, true);
                 item.status = '失敗';
                 fileQueue.shift();
                 renderSendQueue();
@@ -473,13 +606,15 @@
         }
 
         // ----------------------------------------------------
-        // IV. 受信処理 (メタデータ/チャンクの結合)
+        // VI. 受信処理 (メタデータ/チャンクの結合)
         // ----------------------------------------------------
 
         function handleMetadata(data) {
             if (data.fileId && data.name && data.size) {
+                logDebug(`Metadata received for file ID: ${data.fileId}, Name: ${data.name}`);
+
                 if (receiveLogEl.textContent.includes('接続を待っています...')) {
-                     receiveLogEl.innerHTML = ''; // 初回受信時に初期メッセージを削除
+                     receiveLogEl.innerHTML = ''; 
                 }
                 
                 // 新しいファイル転送開始
@@ -508,7 +643,10 @@
 
         function handleChunk(data) {
             const fileItem = receivedFiles[data.fileId];
-            if (!fileItem) return;
+            if (!fileItem) {
+                logDebug(`Received chunk for unknown file ID: ${data.fileId}`, true);
+                return;
+            }
 
             fileItem.chunks.push(data.chunk);
             fileItem.receivedBytes += data.chunk.byteLength;
@@ -522,9 +660,13 @@
 
             // 全てのチャンクを受信完了したかチェック
             if (fileItem.receivedBytes >= fileItem.metadata.size) {
-                const receivedFile = new Blob(fileItem.chunks);
-                const downloadUrl = URL.createObjectURL(receivedFile);
+                logDebug(`File ID ${data.fileId} received completely. Starting Blob construction.`);
                 
+                // ArrayBufferの配列を一つのBlobに結合
+                const receivedFile = new Blob(fileItem.chunks);
+                
+                // ダウンロードリンクの生成
+                const downloadUrl = URL.createObjectURL(receivedFile);
                 const a = document.createElement('a');
                 a.href = downloadUrl;
                 a.download = fileItem.metadata.name;
@@ -533,6 +675,7 @@
                 
                 // ダウンロード開始後にURLを解放
                 a.addEventListener('click', () => {
+                    logDebug(`Download link clicked for ${fileItem.metadata.name}. Revoking URL in 500ms.`);
                     setTimeout(() => {
                         URL.revokeObjectURL(downloadUrl);
                     }, 500); 
