@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>外出申請システム（LINE承認フロー対応）</title>
+<style>
+  body{font-family:system-ui,-apple-system,"Hiragino Kaku Gothic ProN",Meiryo,sans-serif;background:#f4f6fa;margin:0;padding:20px;}
+  h1{font-size:22px;margin-bottom:10px;}
+  .card{background:white;padding:20px;border-radius:12px;box-shadow:0 4px 12px rgba(0,0,0,0.07);max-width:720px;margin:auto;}
+  label{display:block;font-weight:600;margin-top:12px;}
+  input,textarea{width:100%;padding:10px;margin-top:6px;border:1px solid #ccd0d8;border-radius:6px;font-size:14px;}
+  textarea{height:120px;}
+  button{padding:12px 16px;border-radius:8px;border:0;background:#2563eb;color:white;font-size:15px;margin-top:20px;cursor:pointer;}
+  button:disabled{background:#9bb7f5;}
+  .status{margin-top:20px;padding:12px;border-radius:8px;background:#eef2ff;display:none;}
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>外出申請システム</h1>
+
+  <label>申請者名</label>
+  <input id="name" placeholder="例：川上 慶人" />
+
+  <label>件名</label>
+  <input id="title" placeholder="例：羽田空港での撮影のため" />
+
+  <label>外出事由</label>
+  <input id="reason" placeholder="例：外出および夕食不要のため" />
+
+  <label>行き先</label>
+  <input id="place" placeholder="例：羽田空港一帯" />
+
+  <label>日付</label>
+  <input id="date" type="date" />
+
+  <label>活動予定</label>
+  <input id="activity" placeholder="例：飛行機撮影および夕食" />
+
+  <label>詳細</label>
+  <textarea id="detail" placeholder="例：羽田空港地区で撮影します。友人と夕食を取るため夕食は不要です。"></textarea>
+
+  <label>外出時間</label>
+  <input id="time" placeholder="例：10時30分〜21時30分" />
+
+  <label>返信用 LINE UserID（任意）</label>
+  <input id="lineid" placeholder="LINEのuserId（無くてもOK）" />
+
+  <button onclick="submitForm()" id="sendBtn">申請を送信する</button>
+
+  <div id="status" class="status"></div>
+</div>
+
+<script>
+async function submitForm(){
+  const btn = document.getElementById('sendBtn');
+  btn.disabled = true;
+
+  const payload = {
+    name: document.getElementById('name').value,
+    title: document.getElementById('title').value,
+    reason: document.getElementById('reason').value,
+    place: document.getElementById('place').value,
+    date: document.getElementById('date').value,
+    activity: document.getElementById('activity').value,
+    detail: document.getElementById('detail').value,
+    time: document.getElementById('time').value,
+    lineid: document.getElementById('lineid').value,
+    ua: navigator.userAgent
+  };
+
+  const statusBox = document.getElementById('status');
+  statusBox.style.display = 'block';
+  statusBox.textContent = "送信中...";
+
+  try{
+    const res = await fetch("https://your-worker.example.workers.dev/apply",{
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify(payload)
+    });
+
+    const data = await res.json();
+    statusBox.textContent = "申請を送信しました。受付番号: " + data.id;
+  }catch(err){
+    statusBox.textContent = "送信に失敗しました: " + err;
+  }
+
+  btn.disabled = false;
+}
+</script>
+</body>
+</html>
